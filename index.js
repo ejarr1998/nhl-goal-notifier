@@ -502,14 +502,45 @@ const server = http.createServer(async (req, res) => {
   // Debug endpoint — check outbound connectivity
   if (req.method === 'GET' && url.pathname === '/api/debug') {
     const results = {};
-    // Test NHL API
-    try {
-      const nhl = await fetchJSON(`${CONFIG.NHL_API}/schedule/now`);
-      results.nhl_api = 'OK';
-      results.nhl_games_today = (nhl.gameWeek?.[0]?.games || []).length;
-    } catch (err) {
-      results.nhl_api = `FAIL: ${err.message}`;
+    const zlib = require('zlib');
+
+    // Raw HTTP test helper that shows status, headers, body length
+    function rawFetch(testUrl) {
+      return new Promise((resolve) => {
+        https.get(testUrl, { headers: { 'User-Agent': 'NHLGoalNotifier/2.0', 'Accept-Encoding': 'gzip, deflate, identity' } }, (res) => {
+          let stream = res;
+          const encoding = res.headers['content-encoding'];
+          if (encoding === 'gzip') stream = res.pipe(zlib.createGunzip());
+          else if (encoding === 'deflate') stream = res.pipe(zlib.createInflate());
+
+          let data = '';
+          stream.on('data', (c) => (data += c));
+          stream.on('end', () => {
+            resolve({
+              status: res.statusCode,
+              encoding: encoding || 'none',
+              bodyLen: data.length,
+              bodyPreview: data.slice(0, 300),
+              headers: { 'content-type': res.headers['content-type'], 'content-encoding': res.headers['content-encoding'] },
+            });
+          });
+          stream.on('error', (e) => resolve({ error: e.message }));
+        }).on('error', (e) => resolve({ error: e.message }));
+      });
     }
+
+    // Test 1: the actual club-schedule endpoint we use for polling
+    const today = new Date().toISOString().split('T')[0];
+    const testTeam = getActiveTeams()[0] || 'SEA';
+    const clubUrl = `${CONFIG.NHL_API}/club-schedule/${testTeam}/week/${today}`;
+    results.club_schedule_test = { url: clubUrl, ...(await rawFetch(clubUrl)) };
+
+    // Test 2: schedule/now (the old test)
+    results.schedule_now = { url: `${CONFIG.NHL_API}/schedule/now`, ...(await rawFetch(`${CONFIG.NHL_API}/schedule/now`)) };
+
+    // Test 3: score/now (alternative endpoint)
+    results.score_now = { url: `${CONFIG.NHL_API}/score/now`, ...(await rawFetch(`${CONFIG.NHL_API}/score/now`)) };
+
     // Test ntfy.sh connectivity
     try {
       await new Promise((resolve, reject) => {
