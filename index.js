@@ -151,18 +151,22 @@ function fetchJSON(url) {
 
 function sendNotification(topic, { title, message, imageUrl, iconUrl, priority = '4' }) {
   return new Promise((resolve, reject) => {
-    const postData = message;
-    const headers = { Title: title, Priority: priority, Tags: 'ice_hockey,goal' };
-    if (imageUrl) headers['Attach'] = imageUrl;
-    if (iconUrl) headers['Icon'] = iconUrl;
+    const payload = JSON.stringify({
+      topic: topic,
+      title: title,
+      message: message,
+      priority: parseInt(priority),
+      tags: ['ice_hockey', 'goal'],
+      ...(imageUrl ? { attach: imageUrl } : {}),
+      ...(iconUrl ? { icon: iconUrl } : {}),
+    });
 
-    const url = new URL(`https://ntfy.sh/${topic}`);
     const req = https.request(
       {
-        hostname: url.hostname,
-        path: url.pathname,
+        hostname: 'ntfy.sh',
+        path: '/',
         method: 'POST',
-        headers: { ...headers, 'Content-Type': 'text/plain', 'Content-Length': Buffer.byteLength(postData) },
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
       },
       (res) => {
         let data = '';
@@ -172,7 +176,7 @@ function sendNotification(topic, { title, message, imageUrl, iconUrl, priority =
       }
     );
     req.on('error', reject);
-    req.write(postData);
+    req.write(payload);
     req.end();
   });
 }
