@@ -230,8 +230,9 @@ function getGameStateFromAPI(apiState) {
 // ============================================================
 const gameTrackers = {};
 
-async function processGame(gameId, teamAbbrevs) {
+async function processGame(gameId, teamAbbrevs, { catchUp = false } = {}) {
   let tracker = gameTrackers[gameId];
+  const isNew = !tracker;
   if (!tracker) {
     tracker = { teamAbbrevs: new Set(teamAbbrevs), knownGoalEvents: new Set(), rosterCache: {}, gameState: 'LIVE' };
     gameTrackers[gameId] = tracker;
@@ -257,6 +258,16 @@ async function processGame(gameId, teamAbbrevs) {
   const awayId = pbpData.awayTeam?.id;
 
   const goals = (pbpData.plays || []).filter((p) => p.typeDescKey === 'goal');
+
+  // If catching up (new mid-game subscription), mark all existing goals as known
+  // so we don't spam notifications for goals that already happened
+  if (catchUp && isNew) {
+    for (const goal of goals) {
+      tracker.knownGoalEvents.add(`${gameId}-${goal.eventId}`);
+    }
+    console.log(`  Caught up on ${goals.length} existing goals for game ${gameId}`);
+    return tracker.gameState;
+  }
 
   for (const goal of goals) {
     const eventKey = `${gameId}-${goal.eventId}`;
@@ -316,6 +327,27 @@ async function processGame(gameId, teamAbbrevs) {
 
   if (tracker.gameState === 'POST_GAME') { delete gameTrackers[gameId]; return 'POST_GAME'; }
   return pbpData.clock?.inIntermission ? 'INTERMISSION' : tracker.gameState;
+}
+
+// Catch up a newly subscribed team — check if there's a live game
+// and pre-seed existing goals so we don't spam old notifications
+async function catchUpNewSubscription(teamAbbrev) {
+  try {
+    const games = await getTeamScheduleToday(teamAbbrev);
+    for (const g of games) {
+      const st = getGameStateFromAPI(g.gameState);
+      if (st === 'LIVE' || st === 'PRE_GAME') {
+        console.log(`  Catching up game ${g.id} for new ${teamAbbrev} subscription`);
+        await processGame(g.id, [teamAbbrev], { catchUp: true });
+
+        // Also trigger an immediate poll cycle so we start tracking right away
+        if (pollTimeout) clearTimeout(pollTimeout);
+        pollTimeout = setTimeout(poll, 1000);
+      }
+    }
+  } catch (err) {
+    console.error(`  Catch-up error for ${teamAbbrev}:`, err.message);
+  }
 }
 
 // ============================================================
@@ -424,6 +456,10 @@ const server = http.createServer(async (req, res) => {
       const result = addSubscription(clean, teamAbbrev);
       if (!result.ok) return jsonRes(res, 409, { error: result.error });
       console.log(`+ Sub: ${clean} → ${teamAbbrev}`);
+
+      // Catch up on any live game in the background (don't block the response)
+      catchUpNewSubscription(teamAbbrev);
+
       return jsonRes(res, 201, { subscription: { ...result.subscription, team: TEAM_BY_ABBREV[teamAbbrev] } });
     } catch (err) { return jsonRes(res, 400, { error: err.message }); }
   }
