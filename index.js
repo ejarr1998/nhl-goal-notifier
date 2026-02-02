@@ -438,14 +438,49 @@ const server = http.createServer(async (req, res) => {
       const { ntfyTopic, teamAbbrev } = body;
       if (!ntfyTopic) return jsonRes(res, 400, { error: 'ntfyTopic required' });
       const team = TEAM_BY_ABBREV[teamAbbrev] || { name: 'NHL', abbrev: 'NHL' };
-      await sendNotification(ntfyTopic.trim(), {
+      console.log(`Test notification → topic: ${ntfyTopic}, team: ${team.name}`);
+      const result = await sendNotification(ntfyTopic.trim(), {
         title: `🧪 Test: ${team.name} Goal Alerts`,
         message: `Notifications are working!\nYou'll be notified when ${team.name} scores.`,
         iconUrl: `https://assets.nhle.com/logos/nhl/svg/${team.abbrev}_dark.svg`,
         priority: '3',
       });
+      console.log(`Test notification result:`, result);
       return jsonRes(res, 200, { ok: true });
-    } catch (err) { return jsonRes(res, 500, { error: err.message }); }
+    } catch (err) {
+      console.error(`Test notification FAILED:`, err.message, err.code || '');
+      return jsonRes(res, 500, { error: `${err.message} (${err.code || 'no code'})` });
+    }
+  }
+
+  // Debug endpoint — check outbound connectivity
+  if (req.method === 'GET' && url.pathname === '/api/debug') {
+    const results = {};
+    // Test NHL API
+    try {
+      const nhl = await fetchJSON(`${CONFIG.NHL_API}/schedule/now`);
+      results.nhl_api = 'OK';
+      results.nhl_games_today = (nhl.gameWeek?.[0]?.games || []).length;
+    } catch (err) {
+      results.nhl_api = `FAIL: ${err.message}`;
+    }
+    // Test ntfy.sh connectivity
+    try {
+      await new Promise((resolve, reject) => {
+        https.get('https://ntfy.sh/v1/health', (res) => {
+          let d = '';
+          res.on('data', (c) => (d += c));
+          res.on('end', () => { results.ntfy_health = `OK (status ${res.statusCode}): ${d}`; resolve(); });
+          res.on('error', reject);
+        }).on('error', reject);
+      });
+    } catch (err) {
+      results.ntfy_health = `FAIL: ${err.message}`;
+    }
+    // Show subscriptions
+    results.subscriptions = subscriptions.map(s => ({ topic: s.ntfyTopic, team: s.teamAbbrev }));
+    results.trackedGames = Object.keys(gameTrackers);
+    return jsonRes(res, 200, results);
   }
 
   if (req.method === 'GET' && url.pathname === '/api/health') {
