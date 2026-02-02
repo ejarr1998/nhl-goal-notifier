@@ -134,16 +134,22 @@ function getSubscribersForTeam(teamAbbrev) {
 // HTTP HELPERS
 // ============================================================
 function fetchJSON(url) {
+  const zlib = require('zlib');
   return new Promise((resolve, reject) => {
     https
-      .get(url, { headers: { 'User-Agent': 'NHLGoalNotifier/2.0' } }, (res) => {
+      .get(url, { headers: { 'User-Agent': 'NHLGoalNotifier/2.0', 'Accept-Encoding': 'gzip, deflate, identity' } }, (res) => {
+        let stream = res;
+        const encoding = res.headers['content-encoding'];
+        if (encoding === 'gzip') stream = res.pipe(zlib.createGunzip());
+        else if (encoding === 'deflate') stream = res.pipe(zlib.createInflate());
+
         let data = '';
-        res.on('data', (chunk) => (data += chunk));
-        res.on('end', () => {
+        stream.on('data', (chunk) => (data += chunk));
+        stream.on('end', () => {
           try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error(`JSON parse failed for ${url}: ${e.message}`)); }
+          catch (e) { reject(new Error(`JSON parse failed for ${url} (encoding: ${encoding || 'none'}, len: ${data.length}): ${e.message}`)); }
         });
-        res.on('error', reject);
+        stream.on('error', reject);
       })
       .on('error', reject);
   });
