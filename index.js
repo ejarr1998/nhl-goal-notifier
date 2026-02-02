@@ -133,11 +133,18 @@ function getSubscribersForTeam(teamAbbrev) {
 // ============================================================
 // HTTP HELPERS
 // ============================================================
-function fetchJSON(url) {
+function fetchJSON(url, _redirectCount = 0) {
   const zlib = require('zlib');
+  if (_redirectCount > 5) return Promise.reject(new Error(`Too many redirects for ${url}`));
   return new Promise((resolve, reject) => {
     https
       .get(url, { headers: { 'User-Agent': 'NHLGoalNotifier/2.0', 'Accept-Encoding': 'gzip, deflate, identity' } }, (res) => {
+        // Follow redirects
+        if ([301, 302, 307, 308].includes(res.statusCode) && res.headers.location) {
+          res.resume(); // drain response
+          return resolve(fetchJSON(res.headers.location, _redirectCount + 1));
+        }
+
         let stream = res;
         const encoding = res.headers['content-encoding'];
         if (encoding === 'gzip') stream = res.pipe(zlib.createGunzip());
@@ -147,7 +154,7 @@ function fetchJSON(url) {
         stream.on('data', (chunk) => (data += chunk));
         stream.on('end', () => {
           try { resolve(JSON.parse(data)); }
-          catch (e) { reject(new Error(`JSON parse failed for ${url} (encoding: ${encoding || 'none'}, len: ${data.length}): ${e.message}`)); }
+          catch (e) { reject(new Error(`JSON parse failed for ${url} (status: ${res.statusCode}, encoding: ${encoding || 'none'}, len: ${data.length}): ${e.message}`)); }
         });
         stream.on('error', reject);
       })
@@ -191,11 +198,20 @@ function sendNotification(topic, { title, message, imageUrl, iconUrl, priority =
 // NHL API
 // ============================================================
 async function getTeamScheduleToday(teamAbbrev) {
-  const today = new Date().toISOString().split('T')[0];
+  // Use US Eastern date to match NHL game dates (games listed in ET)
+  const etNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+  const today = etNow.toISOString().split('T')[0];
   const url = `${CONFIG.NHL_API}/club-schedule/${teamAbbrev}/week/${today}`;
   try {
     const data = await fetchJSON(url);
-    return (data.games || []).filter((g) => g.gameDate === today);
+    // Return games from today that aren't finished, plus any LIVE games from other dates
+    // (handles late-night games that cross midnight ET)
+    return (data.games || []).filter((g) => {
+      const state = getGameStateFromAPI(g.gameState);
+      if (state === 'LIVE') return true; // always include live games
+      if (g.gameDate === today && state !== 'POST_GAME') return true;
+      return false;
+    });
   } catch (err) {
     console.error(`Schedule error (${teamAbbrev}):`, err.message);
     return [];
