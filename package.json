@@ -1,0 +1,14 @@
+{
+  "name": "nhl-goal-notifier",
+  "version": "2.0.0",
+  "description": "Push notifications for any NHL team's goals via ntfy.sh",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "keywords": ["nhl", "hockey", "goals", "notifications", "ntfy"],
+  "license": "MIT"
+}
